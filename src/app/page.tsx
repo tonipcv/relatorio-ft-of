@@ -79,9 +79,9 @@ export default function Home() {
   const fetchTrades = async () => {
     setIsLoading(true)
     try {
-      const response = await fetch('/api/trades')
-      const data = await response.json()
-      setTrades(data)
+      const response = await fetch('/api/trades?all=true')
+      const result = await response.json()
+      setTrades(result.data) // Extrair apenas o array 'data' da resposta
     } catch (error) {
       setImportError('Error fetching trades')
     } finally {
