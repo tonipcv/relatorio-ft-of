@@ -5,6 +5,10 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     
+    // Verificar se o parâmetro 'all' está presente
+    const allParam = searchParams.get('all');
+    const returnAll = allParam === 'true';
+    
     // Parâmetros de paginação
     const page = parseInt(searchParams.get('page') || '1');
     const limit = parseInt(searchParams.get('limit') || '50');
@@ -54,33 +58,48 @@ export async function GET(request: Request) {
     const orderByClause: any = {};
     orderByClause[orderBy] = order;
     
-    // Buscar trades com filtros e paginação
-    const [trades, total] = await Promise.all([
-      prisma.trade.findMany({
+    if (returnAll) {
+      // Se o parâmetro 'all' for true, retorna todos os registros sem paginação
+      const trades = await prisma.trade.findMany({
         where,
-        orderBy: orderByClause,
-        skip,
-        take: limit,
-      }),
-      prisma.trade.count({ where })
-    ]);
-    
-    // Calcular informações de paginação
-    const totalPages = Math.ceil(total / limit);
-    const hasNext = page < totalPages;
-    const hasPrev = page > 1;
-    
-    return NextResponse.json({
-      data: trades,
-      meta: {
-        page,
-        limit,
-        total,
-        totalPages,
-        hasNext,
-        hasPrev
-      }
-    });
+        orderBy: orderByClause
+      });
+      
+      return NextResponse.json({
+        data: trades,
+        meta: {
+          total: trades.length
+        }
+      });
+    } else {
+      // Buscar trades com filtros e paginação
+      const [trades, total] = await Promise.all([
+        prisma.trade.findMany({
+          where,
+          orderBy: orderByClause,
+          skip,
+          take: limit,
+        }),
+        prisma.trade.count({ where })
+      ]);
+      
+      // Calcular informações de paginação
+      const totalPages = Math.ceil(total / limit);
+      const hasNext = page < totalPages;
+      const hasPrev = page > 1;
+      
+      return NextResponse.json({
+        data: trades,
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages,
+          hasNext,
+          hasPrev
+        }
+      });
+    }
   } catch (error) {
     console.error('Error fetching trades:', error);
     return NextResponse.json({ error: 'Error fetching trades' }, { status: 500 });

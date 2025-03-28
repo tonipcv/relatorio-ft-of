@@ -13,6 +13,7 @@ export async function GET() {
         method: 'GET',
         description: 'Obtém lista de trades com suporte a filtros e paginação',
         parameters: [
+          { name: 'all', type: 'boolean', description: 'Se true, retorna todos os trades sem paginação', default: 'false' },
           { name: 'page', type: 'number', description: 'Página atual (começa em 1)', default: '1' },
           { name: 'limit', type: 'number', description: 'Número de itens por página', default: '50' },
           { name: 'idu', type: 'string', description: 'Filtrar por IDU (contém)' },
@@ -23,7 +24,8 @@ export async function GET() {
           { name: 'orderBy', type: 'string', description: 'Campo para ordenar resultados', default: 'createdAt' },
           { name: 'order', type: 'string', description: 'Direção da ordenação (asc ou desc)', default: 'desc' }
         ],
-        example: `${baseUrl}/trades?page=1&limit=10&ativo=BTC&direcao=LONG&orderBy=data&order=desc`
+        example: `${baseUrl}/trades?page=1&limit=10&ativo=BTC&direcao=LONG&orderBy=data&order=desc`,
+        exampleAllParam: `${baseUrl}/trades?all=true&ativo=BTC&orderBy=data&order=desc`
       },
       {
         path: '/trades/:id',
