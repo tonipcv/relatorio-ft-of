@@ -32,7 +32,8 @@ export async function GET(request: Request) {
             mediaPercentual: 0,
             mediaAlvo: 0,
             somaPercentual: 0, // auxiliar para cálculo da média
-            somaAlvo: 0 // auxiliar para cálculo da média
+            somaAlvo: 0, // auxiliar para cálculo da média
+            tradesComAlvo: 0 // contador para trades com alvo válido
           },
           ativoCount: {},
           trades: []
@@ -43,8 +44,31 @@ export async function GET(request: Request) {
       acc[chave].resumo.totalTrades++;
       acc[chave].resumo.tradesLong += trade.direcao === 'LONG' ? 1 : 0;
       acc[chave].resumo.tradesShort += trade.direcao === 'SHORT' ? 1 : 0;
-      acc[chave].resumo.somaPercentual += trade.percentual;
-      acc[chave].resumo.somaAlvo += trade.alvo;
+      
+      // Tratar percentual
+      const percentual = typeof trade.percentual === 'string' 
+        ? parseFloat(trade.percentual) 
+        : trade.percentual;
+      if (!isNaN(percentual)) {
+        acc[chave].resumo.somaPercentual += percentual;
+      }
+
+      // Tratar alvo
+      let alvoNumerico: number | null = null;
+      
+      if (typeof trade.alvo === 'number') {
+        alvoNumerico = trade.alvo;
+      } else if (typeof trade.alvo === 'string' && trade.alvo !== '-') {
+        const parsed = parseFloat(trade.alvo);
+        if (!isNaN(parsed)) {
+          alvoNumerico = parsed;
+        }
+      }
+
+      if (alvoNumerico !== null) {
+        acc[chave].resumo.somaAlvo += alvoNumerico;
+        acc[chave].resumo.tradesComAlvo++;
+      }
 
       // Atualizar contagem de ativos
       acc[chave].ativoCount[trade.ativo] = (acc[chave].ativoCount[trade.ativo] || 0) + 1;
@@ -59,11 +83,14 @@ export async function GET(request: Request) {
     const resultado = Object.entries(tradesPorMes).map(([chave, dados]) => {
       // Calcular médias
       dados.resumo.mediaPercentual = dados.resumo.somaPercentual / dados.resumo.totalTrades;
-      dados.resumo.mediaAlvo = dados.resumo.somaAlvo / dados.resumo.totalTrades;
+      dados.resumo.mediaAlvo = dados.resumo.tradesComAlvo > 0 
+        ? dados.resumo.somaAlvo / dados.resumo.tradesComAlvo 
+        : 0;
 
       // Remover campos auxiliares
       delete dados.resumo.somaPercentual;
       delete dados.resumo.somaAlvo;
+      delete dados.resumo.tradesComAlvo;
 
       // Processar ativos mais negociados
       dados.ativosMaisNegociados = Object.entries(dados.ativoCount)
