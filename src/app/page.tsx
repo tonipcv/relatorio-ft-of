@@ -1,5 +1,6 @@
 'use client'
 
+import { NextResponse } from 'next/server'
 import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import { read, utils } from 'xlsx'
@@ -63,6 +64,7 @@ export default function Home() {
     percentual: '',
     alvo: ''
   })
+  const [percentualMode, setPercentualMode] = useState<'auto' | 'raw' | 'multiply'>('auto')
 
   useEffect(() => {
     fetchTrades()
@@ -159,9 +161,14 @@ export default function Home() {
   }
 
   const handleCSVImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log("Iniciando importação de arquivo...")
     const file = e.target.files?.[0]
-    if (!file) return
+    if (!file) {
+      console.log("Nenhum arquivo selecionado")
+      return
+    }
 
+    console.log("Arquivo selecionado:", file.name, "Tipo:", file.type)
     setImportError(null)
     setSuccessMessage(null)
     setIsLoading(true)
@@ -193,7 +200,7 @@ export default function Home() {
             }
             
             console.log('Excel Headers:', headers)
-            console.log('Excel First Row:', data[0])
+            console.log('CSV First Row:', data[0])
             
             setCsvHeaders(headers)
             setCsvData(data)
@@ -206,14 +213,18 @@ export default function Home() {
             setShowMapping(true)
             setShowMappingModal(true)
             setShowImportModal(false)
+            setIsLoading(false)
           } catch (error) {
             setImportError(error instanceof Error ? error.message : 'Error processing Excel file')
+            setIsLoading(false)
           }
         }
         reader.onerror = () => {
           setImportError('Error reading Excel file')
+          setIsLoading(false)
         }
         reader.readAsArrayBuffer(file)
+        return
       } else {
         // Handle CSV file
         const text = await file.text()
@@ -378,18 +389,48 @@ export default function Home() {
       console.log('CSV Headers:', csvHeaders)
       console.log('First row of data:', csvData[0])
 
-      const trades = csvData.map((row, index) => {
+      console.log('Iniciando processamento das linhas. Total:', csvData.length);
+      console.log('Mapeamento de colunas:', columnMapping);
+      console.log('Headers disponíveis:', csvHeaders);
+
+      // Validar se todas as colunas foram mapeadas
+      const missingMappings = REQUIRED_FIELDS.filter(field => !columnMapping[field as keyof ColumnMapping]);
+      if (missingMappings.length > 0) {
+        throw new Error(`As seguintes colunas não foram mapeadas: ${missingMappings.join(', ')}`);
+      }
+
+      // Filtrar linhas vazias
+      const validRows = csvData.filter(row => row.some(cell => cell !== undefined && cell.trim() !== ''));
+      console.log(`Linhas válidas encontradas: ${validRows.length} de ${csvData.length}`);
+
+      const trades = validRows.map((row, index) => {
+        console.log(`\nProcessando linha ${index + 1}:`, row);
+        
+        // Verificar se a linha tem dados suficientes
+        if (!row || row.length === 0) {
+          console.error(`Linha ${index + 1} está vazia ou inválida:`, row);
+          throw new Error(`Linha ${index + 1} está vazia ou inválida`);
+        }
+        
         const trade: any = {}
         REQUIRED_FIELDS.forEach(field => {
-          const headerIndex = csvHeaders.indexOf(columnMapping[field as keyof ColumnMapping])
+          const mappedColumn = columnMapping[field as keyof ColumnMapping];
+          const headerIndex = csvHeaders.indexOf(mappedColumn);
+          
+          console.log(`Campo ${field}:`, {
+            colunaMapeada: mappedColumn,
+            indiceHeader: headerIndex,
+            valorEncontrado: headerIndex !== -1 ? row[headerIndex] : 'não encontrado'
+          });
+          
           if (headerIndex === -1) {
-            throw new Error(`Column "${columnMapping[field as keyof ColumnMapping]}" not found in CSV`)
+            throw new Error(`Coluna "${mappedColumn}" não encontrada nos headers do CSV. Headers disponíveis: ${csvHeaders.join(', ')}`)
           }
           trade[field] = row[headerIndex]
         })
 
-        // Log the raw trade data for debugging
-        console.log(`Row ${index + 1} raw data:`, trade)
+        // Log do objeto trade completo
+        console.log(`Linha ${index + 1} dados processados:`, trade);
 
         // Handle IDU - ensure it's a string and not empty
         const iduValue = String(trade.idu || '').trim()
@@ -398,13 +439,19 @@ export default function Home() {
         }
 
         // Handle empty or "-" values for other fields
-        if (!trade.ativo || String(trade.ativo).trim() === '' || String(trade.ativo).trim() === '-') {
-          throw new Error('Ativo cannot be empty')
+        const ativoValue = String(trade.ativo || '').trim();
+        if (!ativoValue || ativoValue === '-') {
+          console.error(`Erro na linha ${index + 1}: Ativo vazio ou inválido`, trade);
+          throw new Error(`Ativo não pode estar vazio na linha ${index + 1}. Valor encontrado: "${ativoValue}"`);
         }
+        trade.ativo = ativoValue;
 
-        if (!trade.direcao || String(trade.direcao).trim() === '' || String(trade.direcao).trim() === '-') {
-          throw new Error('Direção cannot be empty')
+        const direcaoValue = String(trade.direcao || '').trim().toUpperCase();
+        if (!direcaoValue || direcaoValue === '-') {
+          console.error(`Erro na linha ${index + 1}: Direção vazia ou inválida`, trade);
+          throw new Error(`Direção não pode estar vazia na linha ${index + 1}. Valor encontrado: "${direcaoValue}"`);
         }
+        trade.direcao = direcaoValue;
 
         if (!['LONG', 'SHORT'].includes(String(trade.direcao).toUpperCase())) {
           throw new Error('Direção must be either LONG or SHORT')
@@ -491,16 +538,12 @@ export default function Home() {
                   let value = parseFloat(cleanPercentual);
                   
                   if (!isNaN(value)) {
-                    // DIFERENÇA IMPORTANTE: Não multiplicamos valores >=1 por 100
-                    // Formato brasileiro específico:
-                    // "0,20" = 20%
-                    // "1,20" = 120% (não é 12000%)
-                    if (value < 1) {
+                    // Aplica a multiplicação com base no modo selecionado
+                    if (percentualMode === 'multiply' || (percentualMode === 'auto' && value < 1)) {
                       value = value * 100;
-                      console.log(`CSV: Convertendo percentual brasileiro <1: "${originalValue}" -> ${value}%`);
+                      console.log(`CSV: Convertendo percentual: "${originalValue}" -> ${value}%`);
                     } else {
-                      // Para valores >= 1, não fazemos nada
-                      console.log(`CSV: Percentual brasileiro >=1: "${originalValue}" -> ${value}%`);
+                      console.log(`CSV: Mantendo percentual: "${originalValue}" -> ${value}%`);
                     }
                     
                     // Reaplica o sinal negativo se necessário
@@ -516,10 +559,14 @@ export default function Home() {
                   // Para formato com ponto decimal ou sem decimal
                   percentual = parseFloat(cleanPercentual);
                   
-                  // Se estiver no formato 0.XX, multiplicamos por 100
-                  if (!isNaN(percentual) && Math.abs(percentual) > 0 && Math.abs(percentual) < 1) {
-                    percentual = percentual * 100;
-                    console.log(`CSV: Convertendo percentual formato americano: "${originalValue}" -> ${percentual}%`);
+                  // Aplica a multiplicação com base no modo selecionado
+                  if (!isNaN(percentual)) {
+                    if (percentualMode === 'multiply' || (percentualMode === 'auto' && Math.abs(percentual) > 0 && Math.abs(percentual) < 1)) {
+                      percentual = percentual * 100;
+                      console.log(`CSV: Convertendo percentual formato americano: "${originalValue}" -> ${percentual}%`);
+                    } else {
+                      console.log(`CSV: Mantendo percentual formato americano: "${originalValue}" -> ${percentual}%`);
+                    }
                   }
                 }
               }
@@ -538,6 +585,12 @@ export default function Home() {
           }
         } else if (typeof trade.percentual === 'number') {
           percentual = trade.percentual;
+          
+          // Aplica a multiplicação com base no modo selecionado para números
+          if (percentualMode === 'multiply' || (percentualMode === 'auto' && Math.abs(percentual) > 0 && Math.abs(percentual) < 1)) {
+            percentual = percentual * 100;
+          }
+          
           console.log(`CSV: Percentual já é número: ${percentual}%`);
         } else {
           percentual = 0;
@@ -572,7 +625,9 @@ export default function Home() {
       })
 
       // Get existing trades to check for duplicates
-      const existingTrades = await fetch('/api/trades').then(res => res.json())
+      const response = await fetch('/api/trades?all=true')
+      const result = await response.json()
+      const existingTrades = result.data // Extrair o array 'data' da resposta
       const existingIdus = new Set(existingTrades.map((t: Trade) => t.idu))
 
       let updatedCount = 0
@@ -723,7 +778,8 @@ export default function Home() {
       let value = parseFloat(cleanPercentual);
       
       if (!isNaN(value)) {
-        if (value < 1) {
+        // Aplica a multiplicação com base no modo selecionado
+        if (percentualMode === 'multiply' || (percentualMode === 'auto' && value < 1)) {
           value = value * 100;
         }
         
@@ -739,7 +795,8 @@ export default function Home() {
     // Para formato com ponto decimal ou sem decimal
     const numValue = parseFloat(cleanPercentual);
     if (!isNaN(numValue)) {
-      if (numValue > 0 && numValue < 1) {
+      // Aplica a multiplicação com base no modo selecionado
+      if (percentualMode === 'multiply' || (percentualMode === 'auto' && numValue > 0 && numValue < 1)) {
         return (numValue * 100) + '%';
       }
       return numValue + '%';
@@ -969,12 +1026,34 @@ export default function Home() {
                 </div>
                 
                 {isLoading && (
-                  <div className="mt-4 flex justify-center">
-                    <svg className="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span className="ml-2 text-sm text-gray-600">Processando arquivo...</span>
+                  <div className="mt-4">
+                    <div className="flex justify-center items-center">
+                      <svg className="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      <span className="ml-2 text-sm text-gray-600">Processando arquivo...</span>
+                    </div>
+                    <div className="mt-2 text-xs text-gray-500 text-center">
+                      Por favor, aguarde enquanto processamos seu arquivo.
+                      <br />
+                      Isso pode levar alguns segundos.
+                    </div>
+                  </div>
+                )}
+                {importError && (
+                  <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-md">
+                    <div className="flex">
+                      <div className="flex-shrink-0">
+                        <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                        </svg>
+                      </div>
+                      <div className="ml-3">
+                        <h3 className="text-sm font-medium text-red-800">Erro ao processar arquivo</h3>
+                        <div className="mt-2 text-sm text-red-700">{importError}</div>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1124,12 +1203,52 @@ export default function Home() {
                   </div>
 
                   <div className="mt-4 p-4 bg-yellow-50 rounded-md border border-yellow-200">
-                    <h4 className="text-sm font-medium text-yellow-800 mb-2">⚠️ Verifique o mapeamento cuidadosamente:</h4>
+                    <h4 className="text-sm font-medium text-yellow-800 mb-2">⚠️ Verifique o mapeamento e interpretação dos valores:</h4>
                     <ul className="list-disc pl-5 text-sm text-yellow-700 space-y-1">
-                      <li><strong>percentual</strong>: Valores como "0,20" serão convertidos para 20%</li>
-                      <li><strong>alvo</strong>: Valores como "2" serão mantidos como 2</li>
-                      <li>Certifique-se de que os campos estão mapeados corretamente antes de importar</li>
+                      <li><strong>percentual</strong>: Como os valores devem ser interpretados?</li>
                     </ul>
+                    
+                    <div className="mt-2 space-y-2">
+                      <div className="flex items-center">
+                        <input
+                          id="percentual-auto"
+                          name="percentual-mode"
+                          type="radio"
+                          checked={percentualMode === 'auto'}
+                          onChange={() => setPercentualMode('auto')}
+                          className="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                        />
+                        <label htmlFor="percentual-auto" className="ml-2 block text-sm text-gray-700">
+                          Automático (valores &lt; 1 multiplicados por 100, ex: 0,20 → 20%, 1,5 → 1,5%)
+                        </label>
+                      </div>
+                      <div className="flex items-center">
+                        <input
+                          id="percentual-raw"
+                          name="percentual-mode"
+                          type="radio"
+                          checked={percentualMode === 'raw'}
+                          onChange={() => setPercentualMode('raw')}
+                          className="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                        />
+                        <label htmlFor="percentual-raw" className="ml-2 block text-sm text-gray-700">
+                          Literal (valores exatos, ex: 0,20 → 0,2%, 1,5 → 1,5%)
+                        </label>
+                      </div>
+                      <div className="flex items-center">
+                        <input
+                          id="percentual-multiply"
+                          name="percentual-mode"
+                          type="radio"
+                          checked={percentualMode === 'multiply'}
+                          onChange={() => setPercentualMode('multiply')}
+                          className="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                        />
+                        <label htmlFor="percentual-multiply" className="ml-2 block text-sm text-gray-700">
+                          Multiplicar tudo por 100 (ex: 0,20 → 20%, 1,5 → 150%, 2,6 → 260%)
+                        </label>
+                      </div>
+                    </div>
                   </div>
                   
                   <div className="mt-4 text-sm text-gray-500">

@@ -138,7 +138,7 @@ export async function POST(request: Request) {
         ativo: body.ativo,
         direcao: body.direcao,
         percentual: parseFloat(body.percentual),
-        alvo: parseFloat(body.alvo)
+        alvo: body.alvo === null || body.alvo === undefined || isNaN(parseFloat(String(body.alvo))) ? 0 : parseFloat(String(body.alvo))
       }
     })
     return NextResponse.json(trade)
@@ -191,7 +191,7 @@ export async function PUT(request: Request) {
         ativo,
         direcao,
         percentual: percentualValue,
-        alvo: parseFloat(String(alvo))
+        alvo: alvo === null || alvo === undefined || isNaN(parseFloat(String(alvo))) ? 0 : parseFloat(String(alvo))
       },
     })
 
